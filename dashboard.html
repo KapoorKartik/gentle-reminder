@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gentle Sender</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">✉</span>
+      <h1>Gentle Sender</h1>
+      <span id="headStatus" class="pill" hidden></span>
+    </div>
+    <nav class="tabs">
+      <button data-tab="compose" class="active">Compose</button>
+      <button data-tab="progress">Progress <span id="progressBadge" class="badge" hidden></span></button>
+      <button data-tab="history">History</button>
+    </nav>
+    <div class="head-right">
+      <button id="openWa" class="link-btn" title="Open WhatsApp Web in a new tab">WhatsApp ↗</button>
+      <span class="credit">Made with <span class="heart">♥</span> by <b>Karunābdhi Srigovind Das</b></span>
+    </div>
+  </header>
+
+  <!-- ① Compose -->
+  <main data-panel="compose" class="two-col">
+    <section class="card">
+      <h2>Contacts</h2>
+      <label class="drop">
+        <span>📁 Upload <b>.vcf</b> or <b>.csv</b> files <span class="muted">(you can pick several)</span></span>
+        <input type="file" id="files" multiple accept=".vcf,.csv,.txt,text/vcard,text/csv">
+      </label>
+      <textarea id="paste" rows="3" placeholder="…or paste, one per line:&#10;Rohith, 9876543210&#10;9876543210 Ajay"></textarea>
+      <div class="row">
+        <button id="addPaste">Add pasted</button>
+        <span id="pasteHint" class="small muted"></span>
+      </div>
+
+      <div class="list-head">
+        <h3 id="tableTitle">Contacts to send (0)</h3>
+        <button id="clearContacts" class="ghost small-btn">Clear list</button>
+      </div>
+      <p id="contactSummary" class="muted small"></p>
+      <details id="invalidBox" hidden>
+        <summary id="invalidSummary"></summary>
+        <ul id="invalidList"></ul>
+      </details>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>#</th><th>{name}</th><th>Full name</th><th>Phone</th><th></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="col">
+      <section class="card">
+        <h2>Message</h2>
+        <textarea id="message" rows="7" placeholder="Hare Krishna {name|ji} 🙏&#10;&#10;Our Bhagavad Gita class is this Sunday at 6 PM…"></textarea>
+        <p class="hint">
+          <code>{name}</code> first name · <code>{fullname}</code> · <code>{name|ji}</code> uses “ji” if no name.
+          Emojis: paste them or use your OS emoji picker.
+        </p>
+        <div class="muted small">Preview for <span id="previewWho">—</span></div>
+        <div id="preview" class="bubble"></div>
+      </section>
+
+      <section class="card">
+        <details class="settings">
+          <summary><h2>Speed settings</h2> <span id="speedSummary" class="muted small"></span></summary>
+          <div class="grid">
+            <label>Min gap (minutes)<input type="number" id="s_minGap" min="0.5" step="0.5"></label>
+            <label>Max gap (minutes)<input type="number" id="s_maxGap" min="0.5" step="0.5"></label>
+            <label>Daily cap<input type="number" id="s_dailyCap" min="0"></label>
+            <label>Break every N msgs<input type="number" id="s_breakEvery" min="0"></label>
+            <label>Break min (minutes)<input type="number" id="s_breakMin" min="1"></label>
+            <label>Break max (minutes)<input type="number" id="s_breakMax" min="1"></label>
+            <label>Send from (hour)<input type="number" id="s_startHour" min="0" max="23"></label>
+            <label>Send until (hour)<input type="number" id="s_endHour" min="0" max="24"></label>
+          </div>
+        </details>
+      </section>
+
+      <section class="card">
+        <div class="step">
+          <h3><span class="num">1</span> Check it on yourself <span class="muted small">(optional)</span></h3>
+          <p class="muted small">Sends this message only to <b>your</b> number, so you can see how it looks in WhatsApp.</p>
+          <div class="row">
+            <input id="testPhone" placeholder="Your WhatsApp number" inputmode="tel">
+            <button id="testBtn">Send test to me</button>
+          </div>
+          <p id="testStatus" class="small"></p>
+        </div>
+
+        <div class="step">
+          <h3><span class="num">2</span> Send to everyone</h3>
+          <button id="startBtn" class="primary big">Send to 0 contacts</button>
+          <p id="estimate" class="muted small center"></p>
+          <p id="startNote" class="small center warn" hidden></p>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <!-- ② Progress -->
+  <main data-panel="progress" hidden>
+    <section class="card" id="noCampaign">
+      <p class="muted center">No campaign running. Set one up in <a href="#" data-goto="compose">Compose</a>,
+        or see finished ones in <a href="#" data-goto="history">History</a>.</p>
+    </section>
+
+    <div id="campaign" hidden>
+      <section class="card">
+        <div class="stats">
+          <div><b id="statSent">0</b><span>Sent ✅</span></div>
+          <div><b id="statFailed">0</b><span>Failed ❌</span></div>
+          <div><b id="statUnsure">0</b><span>Check ⚠️</span></div>
+          <div><b id="statLeft">0</b><span>Waiting</span></div>
+        </div>
+        <div class="progress"><div id="bar"></div></div>
+        <p id="runStatus" class="center"></p>
+        <div class="row center-row">
+          <button id="pauseBtn">⏸ Pause</button>
+          <button id="resumeBtn" class="primary">▶ Resume</button>
+          <button id="stopBtn" class="danger">⏹ Stop</button>
+        </div>
+        <div class="row center-row">
+          <button id="retryBtn" class="ghost small-btn">Retry failed</button>
+          <button id="exportBtn" class="ghost small-btn">Export CSV</button>
+          <button id="newBtn" class="ghost small-btn">Close campaign</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 id="liveTitle">Contacts</h2>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>#</th><th>Name</th><th>Phone</th><th>Status</th><th>Time</th></tr></thead>
+            <tbody id="liveRows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <details>
+          <summary class="muted">Activity log (details for troubleshooting)</summary>
+          <ol id="log" reversed></ol>
+        </details>
+      </section>
+    </div>
+  </main>
+
+  <!-- ③ History -->
+  <main data-panel="history" hidden>
+    <section class="card">
+      <p id="today"></p>
+      <div id="history"></div>
+    </section>
+  </main>
+
+  <script src="common.js"></script>
+  <script src="dashboard.js"></script>
+</body>
+</html>

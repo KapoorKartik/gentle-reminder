@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Gentle Sender",
+  "version": "0.1.0",
+  "description": "Send a personalised message to a contact list on WhatsApp Web, slowly, at random intervals.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["common.js", "background.js"]
+  },
+  "action": { "default_title": "Open Gentle Sender" },
+  "content_scripts": [
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": { "id": "gentle-sender@local", "strict_min_version": "121.0" }
+  }
+}
