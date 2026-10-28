@@ -7,6 +7,8 @@ if (typeof importScripts === 'function' && typeof renderMessage === 'undefined')
 
 const WA = 'https://web.whatsapp.com/';
 const WATCHDOG_MS = 120_000;
+// Uploading an attachment needs more time before we give up on the tab.
+const watchdogMs = (s) => (s.current === 'test' ? s.test?.attachment : s.hasAttachment) ? 240_000 : WATCHDOG_MS;
 
 chrome.action.onClicked.addListener(() => {
   chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') });
@@ -21,6 +23,9 @@ function emptyState() {
     run: 'idle', // idle | running | paused | stopped | done
     contacts: [],
     message: '',
+    messages: [], // variants; each contact gets one (contact.v)
+    hasAttachment: false,
+    attachmentName: '',
     settings: { ...DEFAULT_SETTINGS },
     current: null, // index being sent, 'test', or null
     test: null,
@@ -61,7 +66,9 @@ async function archive(s) {
     startedAt: s.startedAt,
     endedAt: Date.now(),
     message: s.message,
-    contacts: s.contacts.map(({ name, fullname, phone, status, error, at }) => ({ name, fullname, phone, status, error, at })),
+    messages: s.messages,
+    attachmentName: s.hasAttachment ? s.attachmentName : '',
+    contacts: s.contacts.map(({ name, fullname, phone, status, error, at, v }) => ({ name, fullname, phone, status, error, at, v })),
   };
   const { history = [] } = await chrome.storage.local.get('history');
   const rest = history.filter((h) => h.id !== rec.id);
@@ -132,23 +139,23 @@ function scheduleNext(s, quick = false) {
   log(s, why === 'delay' ? `Next in ${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s` : `Pausing (${why}) until ${when}`);
 }
 
+// Old campaigns (before variants) only have s.message.
+const textFor = (s, c) => renderMessage(s.messages?.[c.v] ?? s.message, c);
+
 async function openChat(s, phone, text) {
   const url = `${WA}send?phone=${phone}&text=${encodeURIComponent(text)}`;
   let tab = s.tabId ? await chrome.tabs.get(s.tabId).catch(() => null) : null;
   if (!tab?.url?.startsWith(WA)) [tab] = await chrome.tabs.query({ url: WA + '*' });
-  if (tab) {
-    await chrome.tabs.sendMessage(tab.id, { type: 'navigating' }).catch(() => {});
-    await chrome.tabs.update(tab.id, { url });
-  }
+  if (tab) await chrome.tabs.update(tab.id, { url }); // wa-main.js stops the "Leave app?" prompt
   else tab = await chrome.tabs.create({ url, active: false });
   s.tabId = tab.id;
   s.sendingSince = Date.now();
-  chrome.alarms.create('watchdog', { when: Date.now() + WATCHDOG_MS });
+  chrome.alarms.create('watchdog', { when: Date.now() + watchdogMs(s) });
 }
 
 // Safety net in case the watchdog alarm never fires (e.g. extension reloaded).
 async function unstick(s) {
-  if (s.current == null || Date.now() - (s.sendingSince || 0) < WATCHDOG_MS) return;
+  if (s.current == null || Date.now() - (s.sendingSince || 0) < watchdogMs(s)) return;
   if (s.current === 'test') return finish(s, 'test', false, 'No confirmation from the WhatsApp tab');
   await finish(s, s.current, false, 'No confirmation from the WhatsApp tab — check the chat', 'unsure');
 }
@@ -166,7 +173,7 @@ async function sendNext(s) {
   c.status = 'sending';
   s.current = idx;
   log(s, `Sending to ${c.fullname || c.phone} (+${c.phone})`);
-  await openChat(s, c.phone, renderMessage(s.message, c));
+  await openChat(s, c.phone, textFor(s, c));
 }
 
 async function finish(s, idx, ok, error, failStatus = 'failed') {
@@ -243,10 +250,15 @@ async function handle(msg, sender) {
         const fresh = emptyState();
         fresh.daily = s.daily; // the daily cap spans campaigns
         rollDaily(fresh);
+        const messages = msg.messages?.length ? msg.messages : [msg.message];
         Object.assign(s, fresh, {
           run: 'running',
-          contacts: msg.contacts.map((c) => ({ ...c, status: 'pending', error: '' })),
-          message: msg.message,
+          // Pick the variant once, so a retry or resume sends the same text.
+          contacts: msg.contacts.map((c) => ({ ...c, v: Math.floor(Math.random() * messages.length), status: 'pending', error: '' })),
+          message: messages[0],
+          messages,
+          hasAttachment: !!msg.attachment,
+          attachmentName: msg.attachmentName || '',
           settings: msg.settings,
           tabId: s.tabId,
           startedAt: Date.now(),
@@ -303,7 +315,7 @@ async function handle(msg, sender) {
       return update(async (s) => {
         if (s.current != null) throw new Error('Busy sending — try again in a moment');
         if (s.run === 'running') throw new Error('Pause the campaign before sending a test');
-        s.test = { phone: msg.phone };
+        s.test = { phone: msg.phone, attachment: !!msg.attachment };
         s.current = 'test';
         log(s, `Sending test to +${msg.phone}`);
         await openChat(s, msg.phone, msg.text);
@@ -328,9 +340,9 @@ async function handle(msg, sender) {
     case 'ready':
       return update((s) => {
         if (s.current == null || s.tabId !== sender.tab?.id) return null;
-        if (s.current === 'test') return { idx: 'test', phone: s.test.phone };
+        if (s.current === 'test') return { idx: 'test', phone: s.test.phone, attachment: s.test.attachment };
         const c = s.contacts[s.current];
-        return c.status === 'sending' ? { idx: s.current, phone: c.phone } : null;
+        return c.status === 'sending' ? { idx: s.current, phone: c.phone, attachment: s.hasAttachment } : null;
       });
 
     case 'result':

@@ -4,12 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Gentle Sender</title>
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="dashboard.css">
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="logo">✉</span>
+      <img class="logo" src="icons/icon.svg" alt="">
       <h1>Gentle Sender</h1>
       <span id="headStatus" class="pill" hidden></span>
     </div>
@@ -19,7 +20,6 @@
       <button data-tab="history">History</button>
     </nav>
     <div class="head-right">
-      <button id="openWa" class="link-btn" title="Open WhatsApp Web in a new tab">WhatsApp ↗</button>
       <span class="credit">Made with <span class="heart">♥</span> by <b>Karunābdhi Srigovind Das</b></span>
     </div>
   </header>
@@ -43,6 +43,10 @@
         <button id="clearContacts" class="ghost small-btn">Clear list</button>
       </div>
       <p id="contactSummary" class="muted small"></p>
+      <div id="todayWarn" class="today-warn" hidden>
+        <span id="todayText"></span>
+        <label class="check"><input type="checkbox" id="skipToday"> Skip them</label>
+      </div>
       <details id="invalidBox" hidden>
         <summary id="invalidSummary"></summary>
         <ul id="invalidList"></ul>
@@ -57,14 +61,31 @@
 
     <div class="col">
       <section class="card">
-        <h2>Message</h2>
+        <div class="msg-head">
+          <h2>Message</h2>
+          <div id="variantTabs" class="vtabs"></div>
+        </div>
         <textarea id="message" rows="7" placeholder="Hare Krishna {name|ji} 🙏&#10;&#10;Our Bhagavad Gita class is this Sunday at 6 PM…"></textarea>
         <p class="hint">
           <code>{name}</code> first name · <code>{fullname}</code> · <code>{name|ji}</code> uses “ji” if no name.
           Emojis: paste them or use your OS emoji picker.
+          <span id="variantHint"></span>
         </p>
+        <div class="attach-row">
+          <label id="attachLabel" class="attach-btn">📎 Attach image or PDF
+            <input type="file" id="attachFile" accept="image/*,video/mp4,application/pdf,.pdf" hidden>
+          </label>
+          <div id="attachInfo" class="attach-info" hidden>
+            <span id="attachName"></span>
+            <button id="attachRemove" class="ghost small-btn" title="Remove attachment">×</button>
+          </div>
+        </div>
         <div class="muted small">Preview for <span id="previewWho">—</span></div>
-        <div id="preview" class="bubble"></div>
+        <div id="preview" class="bubble">
+          <img id="previewImg" alt="" hidden>
+          <div id="previewFile" class="preview-file" hidden></div>
+          <div id="previewText"></div>
+        </div>
       </section>
 
       <section class="card">
@@ -106,34 +127,54 @@
 
   <!-- ② Progress -->
   <main data-panel="progress" hidden>
-    <section class="card" id="noCampaign">
-      <p class="muted center">No campaign running. Set one up in <a href="#" data-goto="compose">Compose</a>,
-        or see finished ones in <a href="#" data-goto="history">History</a>.</p>
+    <section class="card empty" id="noCampaign">
+      <h2>No campaign running</h2>
+      <p class="muted">Set one up in Compose, or look through finished ones in History.</p>
+      <div class="row">
+        <button class="primary" data-goto="compose">Go to Compose</button>
+        <button class="ghost" data-goto="history">View History</button>
+      </div>
     </section>
 
-    <div id="campaign" hidden>
-      <section class="card">
-        <div class="stats">
-          <div><b id="statSent">0</b><span>Sent ✅</span></div>
-          <div><b id="statFailed">0</b><span>Failed ❌</span></div>
-          <div><b id="statUnsure">0</b><span>Check ⚠️</span></div>
-          <div><b id="statLeft">0</b><span>Waiting</span></div>
-        </div>
-        <div class="progress"><div id="bar"></div></div>
-        <p id="runStatus" class="center"></p>
-        <div class="row center-row">
-          <button id="pauseBtn">⏸ Pause</button>
-          <button id="resumeBtn" class="primary">▶ Resume</button>
-          <button id="stopBtn" class="danger">⏹ Stop</button>
-        </div>
-        <div class="row center-row">
-          <button id="retryBtn" class="ghost small-btn">Retry failed</button>
-          <button id="exportBtn" class="ghost small-btn">Export CSV</button>
-          <button id="newBtn" class="ghost small-btn">Close campaign</button>
-        </div>
-      </section>
+    <div id="campaign" class="two-col" hidden>
+      <div class="col">
+        <section class="card">
+          <div class="run-head">
+            <span id="runState" class="pill"></span>
+            <span id="runCount" class="muted small"></span>
+          </div>
+          <div class="run-pct"><b id="runPct">0%</b><span class="muted">complete</span></div>
+          <div class="progress"><div id="bar"></div></div>
+          <p id="runStatus"></p>
 
-      <section class="card">
+          <div class="stats">
+            <div class="ok"><span>Sent</span><b id="statSent">0</b></div>
+            <div class="bad"><span>Failed</span><b id="statFailed">0</b></div>
+            <div class="chk"><span>To check</span><b id="statUnsure">0</b></div>
+            <div><span>Waiting</span><b id="statLeft">0</b></div>
+          </div>
+
+          <div class="controls">
+            <button id="pauseBtn">⏸ Pause</button>
+            <button id="resumeBtn" class="primary">▶ Resume</button>
+            <button id="stopBtn" class="danger">⏹ Stop</button>
+          </div>
+          <div class="row actions">
+            <button id="retryBtn" class="ghost small-btn">Retry failed</button>
+            <button id="exportBtn" class="ghost small-btn">Export CSV</button>
+            <button id="newBtn" class="ghost small-btn">Close campaign</button>
+          </div>
+        </section>
+
+        <section class="card">
+          <details>
+            <summary class="muted">Activity log <span class="small">(for troubleshooting)</span></summary>
+            <ol id="log" reversed></ol>
+          </details>
+        </section>
+      </div>
+
+      <section class="card live">
         <h2 id="liveTitle">Contacts</h2>
         <div class="tablewrap">
           <table>
@@ -141,13 +182,6 @@
             <tbody id="liveRows"></tbody>
           </table>
         </div>
-      </section>
-
-      <section class="card">
-        <details>
-          <summary class="muted">Activity log (details for troubleshooting)</summary>
-          <ol id="log" reversed></ol>
-        </details>
       </section>
     </div>
   </main>

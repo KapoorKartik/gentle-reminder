@@ -2,7 +2,12 @@ const $ = (id) => document.getElementById(id);
 const SETTING_KEYS = Object.keys(DEFAULT_SETTINGS);
 const COUNTRY_CODE = '91';
 
-let draft = { contacts: [], invalid: [], message: '', settings: { ...DEFAULT_SETTINGS } };
+const MAX_VARIANTS = 5;
+const MAX_ATTACHMENT = 16 * 1024 * 1024; // WhatsApp's media limit
+
+let draft = { contacts: [], invalid: [], messages: [''], skipToday: true, settings: { ...DEFAULT_SETTINGS } };
+let activeV = 0; // variant shown in the editor
+let attachment = null; // { name, type, size, dataUrl }, kept in storage under its own key
 let state = null;
 let history = [];
 
@@ -171,9 +176,26 @@ function flash(text) {
   setTimeout(() => { flashMsg = ''; renderSummary(); }, 5000);
 }
 
+// Phones that got a message today, in the live campaign or any archived one.
+function sentTodayPhones() {
+  const lists = [state?.contacts || [], ...history.map((h) => h.contacts)];
+  return new Set(lists.flat().filter((c) => c.status === 'sent' && isToday(c.at)).map((c) => c.phone));
+}
+
+function toSend() {
+  if (!draft.skipToday) return draft.contacts;
+  const done = sentTodayPhones();
+  return draft.contacts.filter((c) => !done.has(c.phone));
+}
+
 function renderSummary() {
   const n = draft.contacts.length;
   $('contactSummary').textContent = `${n} valid contact${n === 1 ? '' : 's'} ready` + (flashMsg ? ` — ${flashMsg}` : '');
+  const done = sentTodayPhones();
+  const already = draft.contacts.filter((c) => done.has(c.phone)).length;
+  $('todayWarn').hidden = !already;
+  $('todayText').textContent = `⚠️ ${already} of these already got a message today`;
+  $('skipToday').checked = draft.skipToday;
   $('invalidBox').hidden = !draft.invalid.length;
   $('invalidSummary').textContent = `${draft.invalid.length} skipped (invalid number) — click to see`;
   $('invalidList').innerHTML = draft.invalid
@@ -183,10 +205,12 @@ function renderSummary() {
 
 function renderTable() {
   $('tableTitle').textContent = `Contacts to send (${draft.contacts.length})`;
+  const done = sentTodayPhones();
   $('rows').innerHTML = draft.contacts.length
     ? draft.contacts
-        .map((c, i) => `<tr>
-          <td>${i + 1}</td><td>${esc(c.name)}</td><td>${esc(c.fullname)}</td><td>+${esc(c.phone)}</td>
+        .map((c, i) => `<tr class="${done.has(c.phone) && draft.skipToday ? 'skipped' : ''}">
+          <td>${i + 1}</td><td>${esc(c.name)}</td><td>${esc(c.fullname)}</td>
+          <td>+${esc(c.phone)}${done.has(c.phone) ? '<span class="tag-today">✓ sent today</span>' : ''}</td>
           <td class="del"><button data-del="${i}" title="Remove">×</button></td>
         </tr>`)
         .join('')
@@ -204,8 +228,36 @@ function renderTable() {
 
 function renderPreview() {
   const c = draft.contacts[0];
-  $('previewWho').textContent = c ? `${c.fullname} (+${c.phone})` : 'sample contact';
-  $('preview').textContent = renderMessage(draft.message, c || { name: 'Rohith', fullname: 'Rohith', phone: '' });
+  const variant = draft.messages.length > 1 ? ` · variant ${activeV + 1}` : '';
+  $('previewWho').textContent = (c ? `${c.fullname} (+${c.phone})` : 'sample contact') + variant;
+  $('previewText').textContent = renderMessage(draft.messages[activeV], c || { name: 'Rohith', fullname: 'Rohith', phone: '' });
+  const img = attachment?.type.startsWith('image/');
+  $('previewImg').hidden = !img;
+  if (img && $('previewImg').src !== attachment.dataUrl) $('previewImg').src = attachment.dataUrl;
+  if (!img) $('previewImg').removeAttribute('src');
+  $('previewFile').hidden = !attachment || img;
+  $('previewFile').textContent = attachment ? `📄 ${attachment.name}` : '';
+}
+
+function renderVariants() {
+  const n = draft.messages.length;
+  $('variantTabs').innerHTML = n > 1 || draft.messages[0]
+    ? draft.messages
+        .map((_, i) => `<button data-v="${i}" class="${i === activeV ? 'active' : ''}">V${i + 1}` +
+          (i > 0 && i === activeV ? `<span class="x" data-vdel="${i}" title="Remove this variant">×</span>` : '') + '</button>')
+        .join('') + (n < MAX_VARIANTS ? '<button class="add" data-vadd title="Add another version of the message">+ Variant</button>' : '')
+    : '';
+  $('variantHint').textContent = n > 1 ? ` Each contact gets one of the ${n} variants at random.` : '';
+  if ($('message').value !== draft.messages[activeV]) $('message').value = draft.messages[activeV];
+}
+
+const fmtSize = (b) => (b > 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.ceil(b / 1024)} KB`);
+
+function renderAttachment() {
+  $('attachInfo').hidden = !attachment;
+  $('attachLabel').hidden = !!attachment;
+  $('attachName').textContent = attachment ? `📎 ${attachment.name} (${fmtSize(attachment.size)})` : '';
+  renderPreview();
 }
 
 function readSettings() {
@@ -216,13 +268,13 @@ function readSettings() {
 
 function renderEstimate() {
   const s = draft.settings;
-  const count = draft.contacts.length;
+  const count = toSend().length;
   $('startBtn').textContent = count ? `Send to ${count} contact${count === 1 ? '' : 's'}` : 'Add contacts to send';
   $('speedSummary').textContent =
     `${s.minGap}–${s.maxGap} min apart · max ${s.dailyCap || '∞'}/day · ${s.startHour}:00–${s.endHour}:00`;
-  const n = draft.contacts.length;
+  const n = count;
   if (!n) { $('estimate').textContent = ''; return; }
-  const perMsg = ((s.minGap + s.maxGap) / 2) * 60 + 15; // + page load
+  const perMsg = ((s.minGap + s.maxGap) / 2) * 60 + 15 + (attachment ? 10 : 0); // + page load, upload
   let secs = n * perMsg;
   if (s.breakEvery > 0) secs += Math.floor(n / s.breakEvery) * ((s.breakMin + s.breakMax) / 2) * 60;
   const days = s.dailyCap > 0 ? Math.ceil(n / s.dailyCap) : 1;
@@ -237,6 +289,8 @@ function renderRun() {
   const total = s.contacts.length;
   const done = counts.sent + counts.failed + (counts.unsure || 0);
   $('bar').style.width = total ? `${(done / total) * 100}%` : '0';
+  $('runPct').textContent = `${total ? Math.floor((done / total) * 100) : 0}%`;
+  $('runCount').textContent = `${done} of ${total} done`;
   $('statSent').textContent = counts.sent;
   $('statFailed').textContent = counts.failed;
   $('statUnsure').textContent = counts.unsure || 0;
@@ -256,6 +310,9 @@ function renderRun() {
   } else if (s.run === 'paused') status = 'Paused — press Resume to continue';
   else if (s.run === 'stopped') status = 'Stopped — Resume to continue, or Close campaign';
   $('runStatus').textContent = status;
+  const label = { running: ['● Sending', 'on'], paused: ['Paused', 'warn'], stopped: ['Stopped', 'warn'], done: ['Finished', 'on'] }[s.run] || ['Idle', ''];
+  $('runState').textContent = label[0];
+  $('runState').className = 'pill ' + label[1];
 
   // Header badge only while there's something to keep an eye on.
   const pill = { running: ['● Sending', 'on'], paused: ['Paused', 'warn'], stopped: ['Stopped', 'warn'] }[s.run];
@@ -281,7 +338,7 @@ function renderRun() {
   $('startNote').innerHTML = blocking ? 'A campaign is in progress — see <a href="#" data-goto="progress">Progress</a>.' : '';
 
   const busy = s.current != null;
-  $('startBtn').disabled = ['running', 'paused'].includes(s.run) || !draft.contacts.length;
+  $('startBtn').disabled = ['running', 'paused'].includes(s.run) || !toSend().length;
   $('pauseBtn').disabled = s.run !== 'running';
   $('resumeBtn').disabled = !['paused', 'stopped'].includes(s.run) || !counts.pending;
   $('stopBtn').disabled = !['running', 'paused'].includes(s.run);
@@ -300,7 +357,8 @@ function renderRun() {
 function renderAll() {
   renderSummary();
   renderTable();
-  renderPreview();
+  renderVariants();
+  renderAttachment();
   renderEstimate();
   renderRun();
   renderHistory();
@@ -371,9 +429,58 @@ $('rows').addEventListener('click', (e) => {
 });
 
 $('message').addEventListener('input', () => {
-  draft.message = $('message').value;
+  const wasEmpty = !draft.messages[activeV];
+  draft.messages[activeV] = $('message').value;
   saveDraft();
   renderPreview();
+  if (wasEmpty !== !draft.messages[activeV]) renderVariants(); // show/hide the tab strip
+});
+
+$('variantTabs').addEventListener('click', (e) => {
+  const t = e.target;
+  if (t.dataset.vdel != null) {
+    draft.messages.splice(Number(t.dataset.vdel), 1);
+    activeV = Math.min(activeV, draft.messages.length - 1);
+  } else if (t.dataset.vadd != null) {
+    draft.messages.push('');
+    activeV = draft.messages.length - 1;
+  } else if (t.closest('[data-v]')) {
+    activeV = Number(t.closest('[data-v]').dataset.v);
+  } else return;
+  saveDraft();
+  renderVariants();
+  renderPreview();
+  $('message').focus();
+});
+
+$('attachFile').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  if (file.size > MAX_ATTACHMENT) return alert(`That file is ${fmtSize(file.size)} — WhatsApp allows up to 16 MB.`);
+  const reader = new FileReader();
+  reader.onload = async () => {
+    attachment = { name: file.name, type: file.type || 'application/octet-stream', size: file.size, dataUrl: reader.result };
+    await chrome.storage.local.set({ attachment });
+    renderAttachment();
+    renderEstimate();
+  };
+  reader.readAsDataURL(file);
+});
+
+$('attachRemove').addEventListener('click', async () => {
+  attachment = null;
+  await chrome.storage.local.remove('attachment');
+  renderAttachment();
+  renderEstimate();
+});
+
+$('skipToday').addEventListener('change', () => {
+  draft.skipToday = $('skipToday').checked;
+  saveDraft();
+  renderTable();
+  renderEstimate();
+  renderRun();
 });
 
 for (const k of SETTING_KEYS) {
@@ -384,31 +491,46 @@ for (const k of SETTING_KEYS) {
   });
 }
 
-$('openWa').addEventListener('click', async () => {
-  // Firefox treats host permissions as optional in MV3; ask once.
-  await chrome.permissions.request({ origins: ['https://web.whatsapp.com/*'] }).catch(() => {});
-  chrome.tabs.create({ url: 'https://web.whatsapp.com/' });
-});
+// Firefox treats host permissions as optional in MV3, so ask on the first send.
+// Must run before any other await, while the click still counts as a user gesture.
+const ensureWaAccess = () =>
+  chrome.permissions.request({ origins: ['https://web.whatsapp.com/*'] }).catch(() => {});
 
 $('testBtn').addEventListener('click', async () => {
+  await ensureWaAccess();
   const phone = normPhone($('testPhone').value);
   if (!phone) return alert('Enter a valid number (10-digit Indian mobile or +countrycode…)');
-  if (!draft.message.trim()) return alert('Write a message first');
+  const text = draft.messages[activeV];
+  if (!text.trim()) return alert('Write a message first');
   const sample = draft.contacts[0] || { name: '', fullname: '', phone };
-  await send({ type: 'test', phone, text: renderMessage(draft.message, sample) });
+  await send({ type: 'test', phone, text: renderMessage(text, sample), attachment: !!attachment });
 });
 
 $('startBtn').addEventListener('click', async () => {
+  await ensureWaAccess();
   addPasted();
   const s = readSettings();
   if (!draft.contacts.length) return alert('Add some contacts first');
-  if (!draft.message.trim()) return alert('Write a message first');
+  const messages = draft.messages.filter((m) => m.trim());
+  if (!messages.length) return alert('Write a message first');
+  const contacts = toSend();
+  const skipped = draft.contacts.length - contacts.length;
+  if (!contacts.length) return alert('Everyone on the list already got a message today. Untick “Skip them” to send again.');
   if (s.minGap < 0.5) return alert('Keep the minimum gap at 0.5 minutes or more');
   if (s.maxGap < s.minGap) return alert('Max gap must be ≥ min gap');
   if (s.breakEvery > 0 && s.breakMax < s.breakMin) return alert('Break max must be ≥ break min');
   if (state?.run === 'stopped' && !confirm('Start a new campaign? The stopped one is kept in History.')) return;
-  if (!confirm(`Send to ${draft.contacts.length} contacts?\n\nKeep WhatsApp Web logged in and this browser open.`)) return;
-  const res = await send({ type: 'start', contacts: draft.contacts, message: draft.message, settings: s });
+  const details = [
+    skipped && `${skipped} skipped — already messaged today`,
+    messages.length > 1 && `${messages.length} message variants`,
+    attachment && `with ${attachment.name}`,
+  ].filter(Boolean);
+  if (!confirm(`Send to ${contacts.length} contacts?` + (details.length ? ` (${details.join(', ')})` : '') +
+    '\n\nKeep WhatsApp Web logged in and this browser open.')) return;
+  const res = await send({
+    type: 'start', contacts, messages, settings: s,
+    attachment: !!attachment, attachmentName: attachment?.name || '',
+  });
   if (!res?.error) showTab('progress');
 });
 
@@ -419,9 +541,10 @@ $('retryBtn').addEventListener('click', () => send({ type: 'retryFailed' }));
 $('newBtn').addEventListener('click', () => confirm('Close this campaign and go back to your list?') && send({ type: 'dismiss' }));
 
 function exportCsv(contacts, when) {
-  const rows = [['name', 'fullname', 'phone', 'status', 'error', 'time']];
+  const rows = [['name', 'fullname', 'phone', 'variant', 'status', 'error', 'time']];
   for (const c of contacts) {
-    rows.push([c.name, c.fullname, '+' + c.phone, c.status, c.error || '', c.at ? new Date(c.at).toLocaleString() : '']);
+    const variant = c.v != null ? c.v + 1 : '';
+    rows.push([c.name, c.fullname, '+' + c.phone, variant, c.status, c.error || '', c.at ? new Date(c.at).toLocaleString() : '']);
   }
   const csv = rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
   const a = document.createElement('a');
@@ -469,7 +592,9 @@ function renderHistory() {
             <span class="st-sent">${k.sent} sent</span> · <span class="st-failed">${k.failed} failed</span>` +
             (k.unsure ? ` · <span class="st-unsure">${k.unsure} to check</span>` : '') +
             (k.pending ? ` · ${k.pending} not sent` : '') +
-            `<div class="muted small">${esc(firstLine)}</div></summary>
+            `<div class="muted small">${esc(firstLine)}` +
+            (h.messages?.length > 1 ? ` · ${h.messages.length} variants` : '') +
+            (h.attachmentName ? ` · 📎 ${esc(h.attachmentName)}` : '') + `</div></summary>
           <div class="row"><button class="ghost" data-export="${h.id}">Export CSV</button>
             <button class="ghost danger" data-delete="${h.id}">Delete</button></div>
           <div class="tablewrap"><table><tbody>${rows}</tbody></table></div>
@@ -495,23 +620,31 @@ chrome.storage.onChanged.addListener((changes) => {
     renderTable();
     renderRun();
   }
-  if (changes.state || changes.history) renderHistory();
+  if (changes.state || changes.history) {
+    renderHistory();
+    renderSummary(); // "sent today" depends on both
+    if (!changes.state) renderTable();
+    renderEstimate();
+  }
 });
 
 setInterval(renderRun, 1000); // countdown
 setInterval(() => state?.current != null && chrome.runtime.sendMessage({ type: 'tick' }).catch(() => {}), 30_000);
 
 (async () => {
-  const stored = await chrome.storage.local.get(['draft', 'state', 'history']);
+  const stored = await chrome.storage.local.get(['draft', 'state', 'history', 'attachment']);
   history = stored.history || [];
+  attachment = stored.attachment || null;
   if (stored.state?.run === 'done' && !history.some((h) => h.id === stored.state.startedAt)) send({ type: 'archive' });
   if (stored.draft) {
     // Settings saved before gaps moved to minutes: start from the new defaults.
     const saved = 'minDelay' in (stored.draft.settings || {}) ? {} : stored.draft.settings;
     draft = { ...draft, ...stored.draft, settings: { ...DEFAULT_SETTINGS, ...saved } };
+    // Drafts from before variants had a single `message`.
+    if (!stored.draft.messages?.length) draft.messages = [stored.draft.message || ''];
+    delete draft.message;
   }
   state = stored.state || null;
-  $('message').value = draft.message;
   for (const k of SETTING_KEYS) $('s_' + k).value = draft.settings[k];
   renderAll();
   if (campaignActive()) showTab('progress');
